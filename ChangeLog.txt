@@ -1,0 +1,5 @@
+2010-02-14  tom taverner  <thomas.taverner@pnl.gov>
+
+	* R/RGtk2DfEdit.R : added selection rectangle drawing from 
+	keyboard, added row and column copy and selection, fixed
+	shift-column selection bug, added row/column name undo

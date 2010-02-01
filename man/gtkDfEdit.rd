@@ -33,7 +33,6 @@ be familiar to spreadsheet users and to form part of larger GUI projects.
 It provides a way to edit a data frame (see Notes for a description).
 
 Changes made in the spreadsheet will appear instantly in the data frame. 
-Fortunately, there is an undo function (Ctrl-z).
 
 The "[" method is used for data-frame like extraction from the object. 
 
@@ -62,17 +61,21 @@ Tom Taverner <Thomas.Taverner@pnl.gov>,
 \note{
 The editor consists of row names, column names, the main grid of cells, and 
 the left-hand corner cell. You can move around within the grid using the 
-keyboard, the scrollbars, or by clicking and dragging with the mouse. Active 
-cells or cell selections are indicated with a focus rectangle. Active columns 
-are indicated by a colored highlight.
+keyboard, the scrollbars, or by clicking and dragging with the mouse. 
 
-\itemize{
+\strong{Navigation Around The Grid}
 
-\item{\strong{Cell Selection and Editing}}{
-Changes made to cells, row names or column names in the data frame editor are 
-automatically updated. Alternatively, the dataset name in the topmost lefthand 
-corner cell can be double clicked and edited. When editing is finished the data 
-frame in the editor will be written to the new dataset name.
+Keyboard navigation uses the familiar arrow or Shift, Shift-Enter, Tab, 
+Shift-Tab, PgUp, PgDown, Ctrl-PgUp, Ctrl-PgDown, Home, End keys. These work
+when either the grid or the column of row names has the focus.
+
+Pressing a non-navigation key when the row names have focus will cause automatic
+navigation to the closest match for the row name. The name matching entry dialog 
+will go away after a couple of seconds.
+
+Mouse navigation to a grid location can be done via the scroll bars on the grid.
+
+\strong{Editing The Grid}
 
 Using non-navigation keys in a selected cell will start editing within the cell.
 If the column is of factor type, the cell entry will provide the user with an 
@@ -84,77 +87,107 @@ strings put into numeric columns will turn into a platform-dependent variant
 of "NA". Adding a new item to a factor column will automatically update the 
 factor levels.
 
-}
-\item{\strong{Keyboard Commands}}{
-Keyboard navigation uses the familiar arrow or Shift, Shift-Enter, Tab, 
-Shift-Tab, PgUp, PgDown, Ctrl-PgUp, Ctrl-PgDown, Home, End keys.
+Changes made in the data frame editor are automatically and invisibly updated 
+so the R data frame object is kept synchronous with the grid display.
 
-Ctrl-A selects all cells.
+Ctrl-Z undoes the previous edit to cells, rows or columns, with certain 
+limitations. It will not restore changes to the numbers of rows or columns, or
+undo coercion.
 
-Ctrl-C copies cell selections to the clipboard.
-
-Ctrl-V pastes cell selections into a block defined by the size of the pasted
-matrix and starting at the corner most selected cell. Pasting automatically
-coerces data to the type in the column. Alternatively these functions can be
-accessed from the right click context menu on cell selections.
-
-Ctrl-Z undoes the previous change, with certain limitations. It will not restore
-changes to the numbers of rows or columns, or row/column name changes.
-
-}
-
-\item{\strong{Mouse Commands}}{
-Left-clicking and dragging on a region of cells selects the region and draws a focus 
-rectangle around it. Selections are indicated by highlighted rows, column headers
-and a drawn focus rectangle. Rows can be selected by focusing on the floating row
-column and then doing either mouse and keyboard selection. Column selection 
-proceeds in the same way. 
-
-Right clicking on a cell selection brings up a menu which allows copying,
-pasting and other functions on the cell selection. "Copy" simply copies the
-selected values to the clipboard while "Copy With Names" includes row and column
-names. This ought to work cross-platform.
-
-Left clicking on column headers or row names selects the columns or rows. 
-Multiple or ranges of columns or rows can be selected using the familiar 
-Ctrl-Click and Shift-Click combinations.
-
-Right clicking on column headers brings up a menu which allows Cut, Copy and
-Paste actions on data columns. From this menu the selected data frame columns' 
-assigned type can be changed. Available data types are Numeric, Integer, 
-Logical, Character, Factor. Factor is a special enumerated data type (also 
-known as a category) which can have its attributes set using the in-built
-Factor Editor (see below). The menu function "Set As Row Names" sets the
-contents of the column as the data frame's row names. The menu function 
-"Shorten Names..." replaces long string names with their unique abbreviations. 
-These operations cannot be undone.
-
-Right clicking on row name headers brings up a menu which allows Insert and 
-Delete actions on data columns. "Insert" inserts a blank row before the row 
-clicked. "Insert After" inserts a blank row after the point. "Delete" deletes 
-the selected row range and is not available when rows are not selected. 
-These operations cannot be undone.
+\strong{Editing Row And Column Names}
 
 Double clicking row names and column names allows the user to edit them. 
 Typing in the replacement name and pressing Enter, Escape or focusing out
 will set the changed row or column name. These operations cannot be undone.
+
+\strong{Editing The Data Frame Object Name}
+
+The name of the data frame object is displayed in the top-left corner cell.
+
+Double clicking the top-left corner cell allows the data set to be updated and 
+reassigned when Return is pressed. When editing is finished the data frame in 
+the editor will be written to the new dataset name.
+
+\strong{Cell Selection}
+
+Active cells or cell selections are indicated with a focus rectangle. Active 
+columns are indicated by a colored highlight. By clicking and dragging with the 
+mouse, you can scroll around the grid in two dimensions and select a rectangular
+block of cells. Alternatively, you can use the keyboard arrow keys with Shift 
+held down to select a block.
+
+Left-clicking and dragging on a region of cells selects the region and draws a 
+focus rectangle around it. Selections are indicated by highlighted rows, column 
+headers and a drawn focus rectangle. Rows can be selected by focusing on the 
+floating row column and then doing either mouse and keyboard selection. 
+
+The keyboard can also be used for grid selection. Left clicking on column 
+headers or row names selects the columns or rows. Multiple, or ranges of, 
+columns or rows can be selected using the usual Ctrl-Click and Shift-Click 
+combinations.
+
+Ctrl-A, or clicking the top-left corner cell, selects all cells on the grid.
+
+\strong{Copying And Pasting}
+
+Ctrl-C copies cell selections to the clipboard at the selected point. 
+At this point, this operation will add rows, but not columns, to the grid.
+
+Ctrl-V pastes cell selections into a block defined by the size of the pasted
+matrix and starting at the corner most selected cell. Pasting automatically
+coerces data to the type in the column. Alternatively these functions can be
+accessed from the grid right click context menu "Copy".
+
+Copying a cell block into the clipboard will not include row or column names. To
+include row and column names in the copy operation, select "Copy With Names" 
+from the grid right click context menu.
+                                       
+Copying and pasting rows and columns can be done through the right click context 
+menus over row headers or column headers in the "Copy" and "Paste" commands.
+Copying from a column will include the column header and copying from a row will
+include the row header. Pasting on columns will update the column headers.
+
+\strong{Data Coercion And Special Functions}
+
+From the right click context menu on column headers the selected data frame 
+columns' assigned type can be changed. Available data types are Numeric, Integer, 
+Logical, Character, Factor. Factor is a special enumerated data type (also 
+known as a category) which can have its attributes set using the in-built
+Factor Editor (see below). To coerce a data column, just open this menu and 
+click the desired type.
+
+The column context menu function "Set As Row Names" sets the
+contents of the column as the data frame's row names. The menu function 
+"Shorten Names..." replaces long string names with their unique abbreviations. 
 
 Right clicking the top-left corner cell selects all cells and brings up a menu 
 allowing global cut, copy, and paste actions. "Row Names To Column" inserts the 
 row names into the first column of the data set and replaces the row names by 
 their ordinality. "Edit Dataset Name" allows the data set name in the R 
 environment to be reassigned. "Default Row Names" sets the row names to their
-ordinal numbers from 1 to the number of rows. These operations cannot be undone.
+ordinal numbers from 1 to the number of rows.
 
-Double clicking the top-left corner cell opens an editor which allows the data 
-set to be updated and reassigned.
+These operations cannot be undone.
 
-}
+\strong{Inserting And Deleting Columns And Rows}
 
-\item{\strong{Editing Factors}}{
-Right clicking on a column header of a factor column, or by right clicking a 
-selected factor column, opens the Factor Editor which allows factor levels, 
-order and contrasts to be set.
+Right clicking on row name headers brings up a menu which allows Insert and 
+Delete actions on data columns. "Insert" inserts a blank row before the row 
+clicked. "Insert After" inserts a blank row after the point. "Delete" deletes 
+the selected row range and is not available when rows are not selected. 
+
+Right clicking on column name headers similarly brings up a menu which allows 
+Insert and Delete actions on data columns. "Insert" inserts a blank column 
+before the column clicked. To insert a blank column at the end, click the blank 
+header at the right hand side. "Delete" deletes the selected column(s).
+
+These operations cannot be undone.
+
+\strong{Editing Factors}
+
+Right clicking on a column header of a factor column, then selecting 
+"Factor Editor", or right clicking a selected factor column, opens the Factor 
+Editor which allows factor levels, order and contrasts to be set.
 
 The Factor Editor window displays the choice of data frame factor columns,
 the factor levels of the selected columns, and the contrasts in the
@@ -191,8 +224,8 @@ The same factor filling options as described above can be accessed directly
 from the Factor Editor window, which can be called up as described above using
 "Selected", "Random Fill" and "Fill with Replicates...". In this
 case, it fills the entire column, not just the highlighted region.
-}
-\item{\strong{Sorting Data}}{
+
+\strong{Sorting Data}
 
 From the right-click menu on the corner left hand cell or on the columns, the 
 "Sort..." dialog can be opened. This dialog consists of (1) a "Sort Key" 
@@ -225,9 +258,6 @@ of keys that can be sorted.
 Finally the "OK" button initiates the data frame sort and the Cancel button 
 closes the dialog. 
 
-}
-
-}
 }
 
 \seealso{
