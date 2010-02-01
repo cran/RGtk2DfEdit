@@ -15,9 +15,13 @@
 # Core dump on moving around?
 # Need class coercion undo via types
 # Pasting rows is buggy when they include factors... omit this for now
+# Updating large data frames is slow... change EntryIntoModel?
+# This causes the entry to give an error:
+  # dfedit(data.frame(array(rnorm(1E7), c(1E5, 1E2))), dataset.name = "big.df")
+# Deleting columns alters scroll
 
 STACK_LIMIT <- 100000
-VERSION_STRING <- "version 0.5.1"
+VERSION_STRING <- "version 0.5.2.1"
 
 # for pasting
 if(.Platform$OS.type == "windows"){
@@ -76,8 +80,10 @@ GetDataFrameFromModel <- function(model, drop=F){
  	# update the data frame  	
 	# Now update the data frame from our model
 	# Returns the new data frame
-UpdateTheRDataFrame <- function(.local, do.factors = TRUE){  
-	new.df <- GetDataFrameFromModel(.local$model)    
+UpdateTheRDataFrame <- function(.local, new.df = NULL, do.factors = TRUE){  
+  if(missing(new.df)) {
+    new.df <- GetDataFrameFromModel(.local$model)    
+  }
   if(do.factors){
   	df <- get(.local$dataset.name, envir=.GlobalEnv)
   	# we're going to coerce it to a data frame if it's a matrix
@@ -143,26 +149,31 @@ EntryIntoModel <- function(.local, entry.frame, row.idx=NULL, col.idx=NULL,
       .local$theStack <- list()
     }
   }
-  #print(.local$theStack)
-          
-  dmn <- dimnames(model)    
+
+  dmn <- dimnames(model)  
+  dimnames.changed <- FALSE            
    # update row and column names
-  if(length(row.idx)) {   
+  if(length(row.idx) && dmn[[1]][row.idx] != rownames(entry.frame)) {   
+    dimnames.changed <- TRUE
     dmn[[1]][row.idx] <- rownames(entry.frame)
     dmn[[1]] <- make.unique(dmn[[1]])
     .local$model[,1] <- dmn[[1]]
   }
-  if(length(col.idx)) {
+  if(length(col.idx) && dmn[[2]][col.idx] != colnames(entry.frame)) {
     dmn[[2]][col.idx] <- entry.frame.colnames <- colnames(entry.frame)
+    dimnames.changed <- TRUE
     for(jj in 1:length(col.idx)){
       new.text <- entry.frame.colnames[jj]
       col.here <- col.idx[jj]-1
      .local$allColumns[[col.here]]$eventbox$getChildren()[[1]]$getChildren()[[1]]$setText(new.text)
     }
   }      
-  "dimnames<-.RGtkDataFrame"(.local$model, dmn) 
+  if(dimnames.changed){
+    "dimnames<-.RGtkDataFrame"(.local$model, dmn) 
+  }
+
   theFrame <- as.data.frame(model)      
-  theClasses <- sapply(theFrame, class)      
+  theClasses <- sapply(theFrame, class)
 
   if(length(col.idx)) if(length(row.idx)) for(jj in 1:length(col.idx)){    
     # set the column names
@@ -189,14 +200,15 @@ EntryIntoModel <- function(.local, entry.frame, row.idx=NULL, col.idx=NULL,
         model[row.idx, col.here] <- to.model  # level in it already
       } # if(add.factors)        
       # full update for factors 
-      UpdateTheRDataFrame(.local)
+      UpdateTheRDataFrame(.local, new.df = theFrame[,-c(1, dim(theFrame)[2]), drop=F])
     } else { # theClass != factor
-      model[row.idx,col.here] <- as(entry.frame[,jj], theClass)        
-      # This is our fast update
+
+      # This assignment can be slow for large data frames...
+      model[row.idx,col.here] <- as(entry.frame[,jj], theClass)            
+            
     }                          
   }
-  UpdateTheRDataFrame(.local, do.factors=FALSE)  
-  #print(model[row.idx,col.idx])
+  UpdateTheRDataFrame(.local, new.df = theFrame[,-c(1, dim(theFrame)[2]), drop=F], do.factors=FALSE)  
 }
 
   # from a vector, get the class name
@@ -1278,7 +1290,7 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
       # We've trapped the temporary GtkEntry the renderer creates.
     gSignalConnect(entry, "key-press-event", RendererEntryKeyPress)
       # you can leave the entry in 2 ways, focusing out or pressing a key from within
-    gSignalConnect(entry, "focus-out-event", function(entry, event){
+    gSignalConnect(entry, "focus-out-event", after=T, function(entry, event){
       model <- .local$model
       view <- .local$view
   	  col.idx <- entry$getData("index")  
@@ -1288,9 +1300,12 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
       # .local$do.paint <- TRUE
 
       if(.local$doingEntryIntoCompletion){ #we're entering data into a factor 
-        entry.frame <- .local$model[row.idx, col.idx, drop=F]      
-        entry.frame[1,1] <- entry$getText()
-        EntryIntoModel(.local, entry.frame, row.idx, col.idx, add.factors=TRUE)
+        entry.frame <- .local$model[row.idx, col.idx, drop=F] 
+        #entry.frame[1,1] <- entry$getText()
+        zz <- list()
+        zz[[colnames(entry.frame)[1]]] <- entry$getText()
+        entry.frame <- data.frame(zz, row.names=rownames(entry.frame))      
+        EntryIntoModel(.local, entry.frame, row.idx, col.idx, add.factors=TRUE)        
           # Get out of selection in reasonable way
         if(!is.null(keyval)){
 	        stat <- entry$getData("stat")			  
@@ -1673,7 +1688,7 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
 	  gSignalConnect(aboutItem, "activate", function(...){
   	  dlg <- gtkAboutDialogNew(show=F)
       dlg["authors"] <- c("Tom Taverner <Thomas.Taverner@pnl.gov>", 
-        "Contributions from John Verzani <verzani@math.csi.cuny.edu>", 
+        "Contributions from John Verzani", 
         "R bindings to Gtk by Michael Lawrence and Duncan Temple Lang")
       dlg["program-name"] <- "RGtk2DfEdit"
       dlg["comments"] <- "A spreadsheet data frame editor for the R environment"
@@ -2008,9 +2023,17 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
   DeleteColumn <- function(col.idx){
     backing.df <- GetDataFrameFromModel(.local$model)  
     new.df <- backing.df[,-col.idx,drop=F]
+    
+    #path <- gtkTreeViewGetCursor(.local$view)$path
+    
     ReplaceEditWindow(new.df)
     UpdateColumnSelection(.local$allColumns, integer(0)) 
     UpdateTheRDataFrame(.local)    
+    
+    #  #set the cursor
+    #col.obj <- .local$allColumns[[col.idx]]
+    #gtkTreeViewSetCursorOnCell(.local$view, path, col.obj$column, 
+    #  col.obj$renderer, FALSE)    
   }
       
   # Append column at a position, null defaults to blank
@@ -2025,9 +2048,17 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
       colnames(new.column) <- new.colname
     }
     new.df <- data.frame(backing.df, new.column, stringsAsFactors=F, 
-      check.names=F)[,idx.ord]      
+      check.names=F)[,idx.ord]  
+      
+    #path <- gtkTreeViewGetCursor(.local$view)$path
+              
     ReplaceEditWindow(new.df)
     UpdateTheRDataFrame(.local)
+    
+    #  # set the cursor
+    #col.obj <- .local$allColumns[[insert.idx]]
+    #gtkTreeViewSetCursorOnCell(.local$view, path, 
+    #  col.obj$column, col.obj$renderer, FALSE)    
   }    
 
 

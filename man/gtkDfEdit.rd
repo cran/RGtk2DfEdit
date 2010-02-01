@@ -55,8 +55,7 @@ The $setColumnClickHandler method sets a function to handle clicking on a column
 A GtkContainer containing the megawidget.
 }
 \author{
-Tom Taverner <Thomas.Taverner@pnl.gov>,
- with contributions from John Verzani <verzani@math.csi.cuny.edu>
+Tom Taverner <Thomas.Taverner@pnl.gov>, with contributions from John Verzani
 }
 \note{
 The editor consists of row names, column names, the main grid of cells, and 
@@ -92,13 +91,15 @@ so the R data frame object is kept synchronous with the grid display.
 
 Ctrl-Z undoes the previous edit to cells, rows or columns, with certain 
 limitations. It will not restore changes to the numbers of rows or columns, or
-undo coercion.
+undo data type coercion.
 
 \strong{Editing Row And Column Names}
 
 Double clicking row names and column names allows the user to edit them. 
-Typing in the replacement name and pressing Enter, Escape or focusing out
-will set the changed row or column name. These operations cannot be undone.
+Typing in the replacement name and pressing Enter, Escape or clicking somewhere 
+else will set the changed row or column name. 
+
+These operations can be undone via Ctrl-Z.
 
 \strong{Editing The Data Frame Object Name}
 
@@ -130,13 +131,24 @@ Ctrl-A, or clicking the top-left corner cell, selects all cells on the grid.
 
 \strong{Copying And Pasting}
 
-Ctrl-C copies cell selections to the clipboard at the selected point. 
-At this point, this operation will add rows, but not columns, to the grid.
+Copied and pasted data is in tab-delimited form and can be pasted directly into
+other spreadsheets or text editors. We use the usual platform specific line
+separator.
 
-Ctrl-V pastes cell selections into a block defined by the size of the pasted
-matrix and starting at the corner most selected cell. Pasting automatically
-coerces data to the type in the column. Alternatively these functions can be
-accessed from the grid right click context menu "Copy".
+In Linux, the functions \code{xclip} and \code{xsel} must be available at the 
+command line for copy and paste to work. In Mac, \code{pbcopy} and \code{pbpaste}
+are used. In Windows, we use the R functions \code{writeClipboard} and 
+\code{readLines}.
+
+Ctrl-V pastes cell selections to the clipboard at the selected point into a 
+block defined by the size of the pasted matrix and starting at the corner most 
+selected cell. At this point, this operation will add rows, but not columns, to
+the grid. Pasting automatically coerces data to the type in the column. 
+
+Ctrl-C entered while focus is on the grid copies the selected block of cells.
+
+Alternatively these functions can be accessed from the grid right click context 
+menu "Copy" and "Paste". 
 
 Copying a cell block into the clipboard will not include row or column names. To
 include row and column names in the copy operation, select "Copy With Names" 
@@ -146,6 +158,8 @@ Copying and pasting rows and columns can be done through the right click context
 menus over row headers or column headers in the "Copy" and "Paste" commands.
 Copying from a column will include the column header and copying from a row will
 include the row header. Pasting on columns will update the column headers.
+
+These operations can be undone via Ctrl-Z.
 
 \strong{Data Coercion And Special Functions}
 

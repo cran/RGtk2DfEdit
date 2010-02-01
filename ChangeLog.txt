@@ -1,3 +1,12 @@
+2010-02-16  tom taverner  <thomas.taverner@pnl.gov>
+
+	* R/RGtk2DfEdit.R : fixed frame saving bug
+	
+2010-02-16  tom taverner  <thomas.taverner@pnl.gov>
+
+	* R/RGtk2DfEdit.R : fixed factor entry bug, improved speed
+	of editing large data frames
+	
 2010-02-14  tom taverner  <thomas.taverner@pnl.gov>
 
 	* R/RGtk2DfEdit.R : added selection rectangle drawing from 
