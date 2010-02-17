@@ -5,23 +5,17 @@
 
 # Bugs. Large data frames seem to act strangely.
 # Column name change has 2px difference in Linux
-# Can get stuck in multiple concurrent entries, need to lock this down
 # Dragging out of cells causes a critical error message
 # Updating to R.envir might get slow
 # Crash unpredictably fixed by turning OnMotion off.
-# Insert into model overwrites row
 # Needs redo support
-# Fix scrolling behavior
 # Core dump on moving around?
-# Need class coercion undo via types
-# Pasting rows is buggy when they include factors... omit this for now
-# Updating large data frames is slow... change EntryIntoModel?
-# This causes the entry to give an error:
-  # dfedit(data.frame(array(rnorm(1E7), c(1E5, 1E2))), dataset.name = "big.df")
 # Deleting columns alters scroll
+# Should be able to specify the environment to update dataframe in
+# Problems with big frames: Updates are slow
 
 STACK_LIMIT <- 100000
-VERSION_STRING <- "version 0.5.2.1"
+VERSION_STRING <- "version 0.5.3.1"
 
 # for pasting
 if(.Platform$OS.type == "windows"){
@@ -30,21 +24,24 @@ if(.Platform$OS.type == "windows"){
   NEWLINE_CHAR <- "\n"
 }
 
-data.types <- list(
-    Character = list(class = "character", coerce = as.character, is.class = is.character, isText=T),
-    Integer = list(class = "integer", coerce = as.integer, is.class = is.integer),
-    Numeric = list(class = "numeric", coerce = as.numeric,
-      is.class = function(x) is.numeric(x) && !is.integer(x)
-    ),
-    Logical = list(class = "logical", coerce = as.logical, is.class = is.logical),
-    Factor = list(class = "factor", coerce = function(x) {
-        x <- sub("^[[:space:]]*(.*?)[[:space:]]*$", "\\1", x, perl=TRUE)    
-        x[nchar(x) == 0] <- NA
-        return(as.factor(x))
-      }, 
-      is.class = is.factor, isFactor = T)    
-  )   
-   
+myDataTypeCoercions <- list(
+  character = function(x){
+    x <- as.character(x) 
+    x[is.na(x)] <- ""   
+    x <- sub("^[[:space:]]*(.*?)[[:space:]]*$", "\\1", x, perl=TRUE)  
+    x[nchar(x) == 0] <- ""
+    return(x)
+  }, 
+  integer = as.integer,
+  logical = as.logical, 
+  numeric = as.numeric, 
+  factor = function(x){
+    x <- sub("^[[:space:]]*(.*?)[[:space:]]*$", "\\1", x, perl=TRUE)    
+    x[nchar(x) == 0] <- NA
+    return(as.factor(x))
+  }
+)
+
   bgColor <- list(as.GdkColor(c(237,236,235)*256),as.GdkColor(c(235,234,219)*256))[[(.Platform$OS.type == "windows")+1]]
   selectedColor <- as.GdkColor(c(198, 213, 253)*256) # Linux
   selectedTextColor <- as.GdkColor("black")
@@ -71,21 +68,15 @@ dfedit <- function(items, dataset.name = deparse(substitute(items)), size=c(500,
   invisible(obj)
 }
 
-# Extract the external representation of the data frame
-GetDataFrameFromModel <- function(model, drop=F){
-  # 2-12-10
-  return("[.RGtkDataFrame"(model,,-c(1, dim(model)[2]), drop=drop))
-}    
-
  	# update the data frame  	
 	# Now update the data frame from our model
 	# Returns the new data frame
-UpdateTheRDataFrame <- function(.local, new.df = NULL, do.factors = TRUE){  
-  if(missing(new.df)) {
-    new.df <- GetDataFrameFromModel(.local$model)    
-  }
-  if(do.factors){
-  	df <- get(.local$dataset.name, envir=.GlobalEnv)
+UpdateTheRDataFrame <- function(.local, do.factors = TRUE, theEnvironment = .GlobalEnv){  
+
+  new.df <- MakeExternalDataFrame(.local$model)
+    # We carry over the contrast settings from the previous data frame.
+  if(exists(.local$dataset.name, envir=theEnvironment) && do.factors){
+  	df <- get(.local$dataset.name, envir=theEnvironment)
   	# we're going to coerce it to a data frame if it's a matrix
   	if(!is.data.frame(df)) df <- as.data.frame(df)	
   	# now we need to carry our original contrasts over...
@@ -97,13 +88,34 @@ UpdateTheRDataFrame <- function(.local, new.df = NULL, do.factors = TRUE){
   		  contrasts(new.df[[nam]]) <- attr(n2, "contrast.name")
   		  attr(new.df[[nam]], "contrast.name") <- attr(n2, "contrast.name")
   	  }}}
-  if(!exists(.local$dataset.name, envir=.GlobalEnv, inherits=F)) 
-    print(paste("RGtk2DfEdit: Creating dataset", .local$dataset.name, "in global environment."))
-	assign(.local$dataset.name, new.df, envir=.GlobalEnv) 
+  if(!exists(.local$dataset.name, envir=theEnvironment, inherits=F)) 
+    print(paste("RGtk2DfEdit: Creating dataset:", .local$dataset.name, 
+      "in environment:", capture.output(theEnvironment)))
+	assign(.local$dataset.name, new.df, envir=theEnvironment) 
 	return(new.df)
 }  	
 
-# call this for inserting stuff in and out of the model
+# Replace all duplicates in the new by the lowest available ordinal
+MyMakeUnique <- function(old.names, new.names, idx){
+  new.names <- myDataTypeCoercions$character(new.names)
+  new.names[!nchar(new.names)] <- "1"
+  dupes <- which(new.names%in%old.names[-idx])
+  new.names[dupes] <- setdiff(as.character(1:length(old.names)), old.names[-idx])[1:length(dupes)]    
+  return(new.names)
+}
+
+
+# Call this for inserting stuff in and out of the model. 
+# This function is central to pretty much everything in the application.
+# We pass a data frame called entry.frame to the function together
+# with row and column indices. We replace the row names, column names, type,
+# and contents of both the model and backing frame by the corresponding data in 
+# entry.frame. This lets us change row names, column names, cell contents and 
+# coercion all in one call, with full undo capability.
+#
+# Have col.idx.insert=c(1,2,3) and col.idx.delete = c(1,2,3) statements?
+# 
+#
 # row.idx and col.idx are both vectors
 # model[row.idx, col.idx] <- entry.frame
 # model[,c(1:2)] <- entry.frame
@@ -114,10 +126,12 @@ UpdateTheRDataFrame <- function(.local, new.df = NULL, do.factors = TRUE){
 # update row names
   #dat <- data.frame(row.names = c("hi", "there"))
   #EntryIntoModel(.local, dat, row.idx, integer(0), add.factors=TRUE)    
+# 2-16-10 updates. Use type of data frame to coerce.
+
   
 EntryIntoModel <- function(.local, entry.frame, row.idx=NULL, col.idx=NULL,  
   add.factors=FALSE, doing.undo=FALSE){
-
+  
   model <- .local$model
   dim.model <- dim(model)
   dataset.name <- .local$dataset.name
@@ -126,15 +140,16 @@ EntryIntoModel <- function(.local, entry.frame, row.idx=NULL, col.idx=NULL,
   #if(!length(entry.frame)) return(FALSE)
   if(is.null(col.idx)) stop("Can't handle null col.idx")
   if(is.null(row.idx)) row.idx <- 1:(dim.model[1])
+  stopifnot(dim.model[1] > 0)
   if(is.null(dim(entry.frame))) entry.frame <- data.frame(entry.frame, stringsAsFactors=FALSE)
   if(dim(entry.frame)[1] != length(row.idx)) stop("Row mismatch")
   if(dim(entry.frame)[2] != length(col.idx)) stop("Column mismatch")
-
+                           
   old.frame <- model[row.idx,col.idx,drop=F]
     # Don't bother editing if you aren't making a change...
     # If we're putting large frames in, this is inefficient, we read them twice
   #if(data.frame.contents.equal(old.frame, entry.frame)) return()
-  if(identical(old.frame, entry.frame)) return()  
+  if(identical(old.frame, entry.frame)) return()
   if (!doing.undo) .local$theStack[[length(.local$theStack)+1]] <- list(
     old.frame = old.frame,
     new.frame = entry.frame,
@@ -153,70 +168,81 @@ EntryIntoModel <- function(.local, entry.frame, row.idx=NULL, col.idx=NULL,
   dmn <- dimnames(model)  
   dimnames.changed <- FALSE            
    # update row and column names
-  if(length(row.idx) && dmn[[1]][row.idx] != rownames(entry.frame)) {   
+   # alter this to only do mismatches
+  # Row name changes   
+  entry.rownames <- rownames(entry.frame)
+
+  if(length(row.idx) && !identical(dmn[[1]][row.idx], entry.rownames)) {
     dimnames.changed <- TRUE
-    dmn[[1]][row.idx] <- rownames(entry.frame)
-    dmn[[1]] <- make.unique(dmn[[1]])
-    .local$model[,1] <- dmn[[1]]
+    dmn[[1]][row.idx] <- MyMakeUnique(dmn[[1]], entry.rownames, row.idx)
+    .local$model[row.idx,1] <- dmn[[1]][row.idx]
   }
-  if(length(col.idx) && dmn[[2]][col.idx] != colnames(entry.frame)) {
-    dmn[[2]][col.idx] <- entry.frame.colnames <- colnames(entry.frame)
+  # Column name changes 
+  entry.colnames <- colnames(entry.frame)   
+  if(length(col.idx) && !identical(dmn[[2]][col.idx], entry.colnames)) {
+    dmn[[2]][col.idx] <- entry.colnames
     dimnames.changed <- TRUE
     for(jj in 1:length(col.idx)){
-      new.text <- entry.frame.colnames[jj]
-      col.here <- col.idx[jj]-1
-     .local$allColumns[[col.here]]$eventbox$getChildren()[[1]]$getChildren()[[1]]$setText(new.text)
+      col.here <- col.idx[jj]    
+      new.text <- dmn[[2]][col.here]
+     .local$allColumns[[col.here-1]]$eventbox$getChildren()[[1]]$getChildren()[[1]]$setText(new.text)
     }
   }      
   if(dimnames.changed){
     "dimnames<-.RGtkDataFrame"(.local$model, dmn) 
   }
 
-  theFrame <- as.data.frame(model)      
-  theClasses <- sapply(theFrame, class)
+  theNewClasses <- sapply(entry.frame, class)
 
-  if(length(col.idx)) if(length(row.idx)) for(jj in 1:length(col.idx)){    
-    # set the column names
-    col.here <- col.idx[jj]        
-      # Don't enter into the last column...
-    if(col.here > dim(model)[2] - 1) next;
-    theClass <- theClasses[col.here] 
-    # Update frame      
-    if(theClass == "factor") {
-      xx <- theFrame[,col.here]
-      lvls <- levels(xx)
-      theLevelClass <- class(lvls)        
-      to.model <- as(entry.frame[,jj], theLevelClass)
-        # replace "" with NA
-      to.model[!nchar(to.model)] <- NA
-      if(add.factors && 
-        (!to.model%in%lvls||!xx[row.idx]%in%xx[!row.idx])){ # code to add a new level
-        x <- as.vector(xx)
-        x[row.idx] <- to.model
-        theFrame[,col.here] <- factor(x) # exclude NA's or not
-        # Update frame          
-        rGtkDataFrameSetFrame(model, theFrame)
-      } else { # existing levels
-        model[row.idx, col.here] <- to.model  # level in it already
-      } # if(add.factors)        
-      # full update for factors 
-      UpdateTheRDataFrame(.local, new.df = theFrame[,-c(1, dim(theFrame)[2]), drop=F])
-    } else { # theClass != factor
+  theFrame <- as.data.frame(model)   
+  theClasses <- sapply(theFrame[integer(0),,drop=F], class)    
+  keep.frame.flag <- FALSE
+    
+  # Data type coercion
+  if(length(col.idx))
+    for(jj in which(theClasses[col.idx] != theNewClasses)){
+      keep.frame.flag <- TRUE    
+      kk <- col.idx[jj]
+      theClass <- theNewClasses[jj]
+      theFrame[,kk] <- myDataTypeCoercions[[theClass]](theFrame[,kk])    
+        # change the column display
+        # maybe this should be in the GUI part...
+      isText <- theClass == "factor" || theClass == "character"
+		  renderer <- .local$allColumns[[kk-1]]$renderer
+      renderer.set <- renderer['ellipsize-set']
+      if( isText && !renderer.set) {
+		      renderer['ellipsize'] <- PangoEllipsizeMode['end']
+		      renderer['ellipsize-set'] <- TRUE
+      } else if (!isText && renderer.set) {
+		      renderer['ellipsize'] <- PangoEllipsizeMode['none']
+		      renderer['ellipsize-set'] <- FALSE
+      }
+    } # for jj
 
-      # This assignment can be slow for large data frames...
-      model[row.idx,col.here] <- as(entry.frame[,jj], theClass)            
-            
-    }                          
+  # Change the cell contents
+  if(add.factors){
+      for(jj in which(theNewClasses == "factor")){
+        col.here <- col.idx[jj]          
+        xx <- theFrame[,col.here]                       
+        lvls <- levels(xx)      
+        theLevelClass <- class(lvls)        
+        to.model <- as(entry.frame[,jj], theLevelClass)
+        to.model[!nchar(to.model)] <- NA
+        if(!to.model%in%lvls||!xx[row.idx]%in%xx[!row.idx]){ 
+          keep.frame.flag <- TRUE
+          x <- as.vector(xx)
+          x[row.idx] <- to.model
+          theFrame[,col.here] <- factor(x)
+        }
+    }# for jj in 1:length(col.idx)
   }
-  UpdateTheRDataFrame(.local, new.df = theFrame[,-c(1, dim(theFrame)[2]), drop=F], do.factors=FALSE)  
-}
-
-  # from a vector, get the class name
-GetDataTypeName <- function(model, col.idx){
-  x <- model[,col.idx]
-  nn <- names(which(sapply(data.types, function(dt) dt$is.class(x))))
-  if(length(nn) == 1) return(nn)
-  stop("Data type name error")
+  
+  if(keep.frame.flag)
+    rGtkDataFrameSetFrame(model, theFrame)
+  else
+    model[row.idx,col.idx] <- entry.frame
+        
+  UpdateTheRDataFrame(.local, do.factors=FALSE) 
 }
 
 SelectedRowIndices <- function(tv)
@@ -227,16 +253,17 @@ SelectedRowIndices <- function(tv)
   )
     
 # Make a data frame to put into the model.
+# We have an extra row for names and a blank at the end.
 MakeInternalDataFrame <- function(dataset, round.numbers = TRUE){
   if(is.null(dim(dataset))) dataset <- cbind(dataset)
-#    if(class(dataset) == "data.frame")
-#      for(ii in which(sapply(dataset, class)=="factor")){
-#        dd <- dataset[,ii]
-#        dataset[,ii] <- as(levels(dd), class(levels(dd))[1])[as.integer(dd)]
-#      }
   if(!length(row.names(dataset)))
       row.names(dataset) <- 1:dim(dataset)[1]
   data.frame(rows = row.names(dataset), dataset, " " = "", check.names = FALSE, stringsAsFactors = FALSE)
+}
+
+# Make a data frame to extract from the model.
+MakeExternalDataFrame <- function(df){
+  df[,-c(1, dim(df)[2]), drop=F]
 }
 
 # From RGtk2 demo
@@ -276,7 +303,7 @@ CopyToClipboard <- function(dat, do.rownames=F, do.colnames=F){
     dat.cn <- paste(dat.cn, paste(colnames(dat), collapse="\t"), sep="")
     dat2 <- paste(dat.cn, dat2, sep=NEWLINE_CHAR)
   }
-
+  
   if(.Platform$OS.type == "windows") {
     #write.function(dat, "clipboard")
     get("writeClipboard", envir=.GlobalEnv)(dat2)
@@ -289,7 +316,7 @@ CopyToClipboard <- function(dat, do.rownames=F, do.colnames=F){
         return(FALSE)
       }
       a <- pipe("xclip -selection c", open="w")
-    }
+  }
     write.function(dat2, a)
     close(a)
   }
@@ -326,8 +353,9 @@ ReadFromClipboard <- function(){
 }
   
 # Need to make sure this doesn't overwrite last column
-InsertIntoModel <- function(.local, dat, do.rownames = F, do.colnames = F, 
+InsertIntoModel <- function(.local, dat, insert.row=NULL, insert.col=NULL, do.rownames = F, do.colnames = F, 
     paste.rows=F){
+        
   theRownames <- NULL
   theColnames <- NULL
   if(do.rownames && do.colnames) {
@@ -346,17 +374,13 @@ InsertIntoModel <- function(.local, dat, do.rownames = F, do.colnames = F,
   view <- .local$view
   dd <- dim(dat)
   dm <- dim(model)
-    # insertion points  
-  ins <- c(SelectedRowIndices(view)[1], .local$selectedColumns[1])
-  if(paste.rows) ins[1] <- SelectedRowIndices(.local$view.rn)[1]
-  if(is.na(ins[1])) ins[1] <- 1
-  if(is.na(ins[2])) ins[2] <- 1  
-  if(paste.rows) ins <- c(SelectedRowIndices(.local$view.rn)[1],
-    1:length(.local$allColumns))
-  if(is.na(ins[2]) && !do.rownames) {
-    quick_message("A column must be selected to paste to")
-    return()
-  }
+    # Get the insertion points  
+  #ins <- c(SelectedRowIndices(view)[1], .local$selectedColumns[1])
+  #if(paste.rows) ins[1] <- SelectedRowIndices(.local$view.rn)[1]  
+  if (is.null(insert.row)) insert.row <- 1
+  if (is.null(insert.col)) insert.col <- 1  
+  ins <- c(insert.row, insert.col)
+  
   ins.end <- c(ins[1]+dd[1]-1, ins[2]+dd[2]-1) # end of insertion range    
   # change class of dat and copy in
   entry.frame <- data.frame(dat, stringsAsFactors = F)
@@ -364,42 +388,39 @@ InsertIntoModel <- function(.local, dat, do.rownames = F, do.colnames = F,
   #row.idx <- ins[1]+1:min(dd[1], dm[1]-ins[1]+1)-1
   
   col.idx <- ins[2] + 1:min(dd[2], dm[2]-ins[2])
+  dat <- dat[,1:min(dd[2], dm[2]-ins[2]),drop=F]
 
     # We're falling off the frame. Add some rows.
   rr1 <- ins[1]+min(dd[1], dm[1]-ins[1]+1)-1    
-  if(ins.end[1] > rr1){
-    n.rows.to.add <- (ins.end[1] - rr1)      # no of rows to add
-    m1 <- model[1,,drop=F]
-    theClasses <- sapply(m1, class)    
-    #theClasses[theClasses=="factor"] <- "character"
-    # this is a nasty kludge to get a reasonable blank line
-    for(jj in 1:length(m1)) {
-      theClass <- theClasses[jj]
-      if(theClass == "factor") {
-        m1[,jj] <- as.factor(NA)
-      } else {
-        m1[,jj] <- as("", theClass)
-      }
-    }
-    m1 <- m1[rep(1, n.rows.to.add),,drop=F]
-    model$appendRows(m1)      
+  if(ins.end[1] > rr1){                  
+    n.rows.to.add <- (ins.end[1] - rr1)      # no of rows to add    
+    blank.frame <- model[1,,drop=F]
+    stopifnot(ncol(blank.frame) > 0)  
+      # Coerce to the classes
+    for(jj in 1:ncol(blank.frame))
+      blank.frame[,jj] <- myDataTypeCoercions[[class(blank.frame[[jj]])]]("")    
+    blank.frame <- blank.frame[rep(1, n.rows.to.add),,drop=F]
+    new.row.names <- setdiff(as.character(1:ins.end[1]), dimnames(model)[[1]])[1:n.rows.to.add]
+    rownames(blank.frame) <- blank.frame[,1] <- new.row.names
+    model$appendRows(blank.frame)     
+    .local$LAST_PATH <- gtkTreePathNewFromString(as.character(dim(model)[1]-1))     
   }
   
-  entry.frame <- entry.frame[1:length(row.idx), 1:length(col.idx),drop=F]  
-  dmn <- dimnames(model)  
-  if(is.null(theRownames)) {
-    rownames(entry.frame) <- dmn[[1]][row.idx]
-  } else {
+    # Create the entry frame and coerce to classes
+  entry.frame <- model[row.idx, col.idx,drop=F]  
+  stopifnot(ncol(entry.frame) > 0)  
+  for(jj in 1:ncol(entry.frame))
+    entry.frame[,jj] <- myDataTypeCoercions[[class(entry.frame[[jj]])]](dat[,jj])
+
+  if(!is.null(theRownames) || !is.null(theRownames))
+    dmn <- dimnames(model)
+  if(!is.null(theRownames))
     rownames(entry.frame) <- theRownames
-  }
-  if(is.null(theColnames)) {
-    colnames(entry.frame) <- dmn[[2]][col.idx]
-  } else {
+  if(!is.null(theColnames))
     colnames(entry.frame) <- theColnames
-  }      
+
   EntryIntoModel(.local, entry.frame, row.idx, col.idx, add.factors=TRUE)  
   # update
-  .local$LAST_PATH <- gtkTreePathNewFromString(as.character(dim(model)[1]-1))
 }
 
 # from gWidgets
@@ -838,6 +859,7 @@ DoFactorEditor <- function(data.model, .local, col.idx=integer(0)){
     contr <- contrast.coding[[which(sapply(rev(grb$getGroup()), gtkToggleButtonGetActive))]]
 	
   	# update contrasts
+  	# Contrasts can't be set in an RGtkDataFrame
   	# we smuggle the contrast name in attr("contrast.name")
     df <- UpdateTheRDataFrame(.local)
   	if(length(levels(df[,col.idx-1])) > 1) {
@@ -993,6 +1015,31 @@ DoSortDialog <- function(data.model, handler, .localenv){
 gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.request=c(500, 300)){
    # our local environment
     .local <- new.env()
+    
+    last.time <- 0
+    COLUMN_OFFSET <- 1
+    .local$COLUMN_OFFSET <- COLUMN_OFFSET
+    gtktab <- NULL
+  
+    .local$selectedColumns <- integer(0)
+    .local$do.paint <- TRUE
+    .local$do.rendererEditingStarted <- TRUE
+    .local$doingEntryIntoFactor <- FALSE
+    .local$flash.cursor <- FALSE        
+    .local$model <- NULL
+    .local$allColumns <- NULL
+    .local$scrollID <- 0
+    .local$disconnected.scrollID <- TRUE
+    .local$FIRST_PATH <- NULL
+    .local$LAST_PATH <- NULL  
+    .local$doingHScroll <- FALSE
+    .local$SCROLL_ROW_TIMEOUT <- 150  
+    .local$theStack <- list()
+    .local$group.main <- gtkVBoxNew()
+    .local$FIRST_PATH <- gtkTreePathNewFromString(0)    
+    .local$scrollID <- 0
+    .local$last.time <- 0  
+    .local$disconnected.scrollID <- TRUE  
   ############################################################
   # Turns out that scroll_row_timeout has no horizontal autoscroll.
   # I based this on gtktreeview::gtk_tree_view_vertical_autoscroll, no offset
@@ -1154,6 +1201,15 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
     return(TRUE)
   }
   
+  RowNamesClearContents <- function(row.idx){
+    if(length(row.idx)==0) return(FALSE)
+    entry.frame <- .local$model[row.idx,, drop=F]
+    col.idx <- 1:dim(entry.frame)[2]
+    for(jj in 2:ncol(entry.frame))
+      entry.frame[,jj] <- myDataTypeCoercions[[class(entry.frame[[jj]])]]("")
+    EntryIntoModel(.local, entry.frame, row.idx, col.idx)
+  }
+  
   RowNamesKeyPress <- function(widget, event,...) {
     keyval <- event[["keyval"]] 
     stat <- as.flag(event[["state"]])    
@@ -1167,12 +1223,20 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
       }
       return(TRUE)
     }
+    if(keyval == GDK_Delete) {
+      row.idx <- SelectedRowIndices(.local$view.rn)
+      RowNamesClearContents(row.idx)
+      return(TRUE)
+    }
     return(FALSE)
   }    
-      
-  #MoveCursor(widget, direction, stat, allColumns, flash.cursor){
+  .local$allow.key.flag <- TRUE
+  
+  #MoveCursor(widget, direction, stat, allColumns, flash.cursor){  
   ViewKeyPress <- function(widget,event,...) {
-    keyval <- event[["keyval"]] 
+
+  
+    keyval <- event[["keyval"]]         
     if(keyval%in%c(GDK_Page_Up, GDK_Page_Down, GDK_Home, GDK_End)) {
       #if(.local$do.paint){
       #  .local$do.paint <- FALSE
@@ -1181,9 +1245,16 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
       PaintSelectionOnTimeout()
       if(.local$do.paint){
         .local$do.paint <- FALSE
-        .local$viewGetBinWindow$invalidateRect(NULL, FALSE)    
+        .local$viewGetBinWindow$invalidateRect(NULL, FALSE)
       }      
-      return(FALSE)    
+      event.time <- event[["time"]]
+      if(.local$allow.key.flag && event.time > .local$last.time){
+        .local$allow.key.flag <- FALSE
+        .local$last.time <- event.time
+        return(FALSE)
+      } else {
+        return(TRUE)
+      }
     }
     allColumns <- .local$allColumns
     view <- .local$view
@@ -1209,7 +1280,9 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
     if (CtrlLetter(keyval, stat, GDK_v)){
       #print("Ctrl-v")
       dat <- ReadFromClipboard() # character vector
-      InsertIntoModel(.local, dat)
+      row.idx <- SelectedRowIndices(view)[1] 
+      col.idx <- .local$selectedColumns[1]
+      InsertIntoModel(.local, dat, row.idx, col.idx)
       return(TRUE)
     }
     if (CtrlLetter(keyval, stat, GDK_z)){
@@ -1217,7 +1290,7 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
       if(!length(.local$theStack)) return(TRUE)
       last.action <- .local$theStack[[length(.local$theStack)]]
       if(!is.null(last.action)){
-        EntryIntoModel(.local, last.action$old.frame, last.action$row.idx, last.action$col.idx, doing.undo=TRUE)
+        EntryIntoModel(.local, last.action$old.frame, last.action$row.idx, last.action$col.idx, doing.undo=TRUE, add.factors=TRUE)
         .local$theStack[[length(.local$theStack)]] <- NULL
       }
       return(TRUE)
@@ -1230,9 +1303,16 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
     # this makes us drop out of selection mode...
     if(keyval == GDK_Delete) {
       row.idx <- SelectedRowIndices(view)
-      col.idx <- GetSelectedColumns() + COLUMN_OFFSET
-      entry.frame <- .local$model[row.idx, col.idx, drop=F]      
-      entry.frame[,] <- ""
+      col.idx <- GetSelectedColumns() + COLUMN_OFFSET      
+      if(length(row.idx)==0) { # delete a column
+        ColumnClearContents(col.idx)  
+        return(TRUE)
+      } else {
+        entry.frame <- .local$model[row.idx, col.idx, drop=F]      
+      }
+      stopifnot(ncol(entry.frame) > 0)  
+      for(jj in 1:ncol(entry.frame))
+        entry.frame[,jj] <- myDataTypeCoercions[[class(entry.frame[[jj]])]]("")
       EntryIntoModel(.local, entry.frame, row.idx, col.idx)
       return(TRUE)
     }
@@ -1258,19 +1338,30 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
       return(FALSE)
     }
 
-    cursor.info <- widget$getCursor()
-    col.idx <- GetColIdx(cursor.info$focus.column)
-    renderer <- allColumns[[col.idx]]$renderer
-      # probably don't need this, cursor's there already?
-     gtkTreeViewSetCursorOnCell(widget, cursor.info$path,
-      cursor.info$focus.column, renderer, TRUE)
-    if(event$time != .local$last.time){
-      .local$last.time <- event$time
-      gtkPropagateEvent(view, event) # or gdkEventPut(event)
+    # Cell editing
+    event.time <- event[["time"]]
+    if(.local$allow.key.flag && event.time > .local$last.time){
+      .local$allow.key.flag <- FALSE   
+      cursor.info <- widget$getCursor()
+      col.idx <- GetColIdx(cursor.info$focus.column)
+      renderer <- allColumns[[col.idx]]$renderer
+        # probably don't need this, cursor's there already?
+      gtkTreeViewSetCursorOnCell(widget, cursor.info$path,
+        cursor.info$focus.column, renderer, TRUE)              
+      gtkPropagateEvent(view, event)
+      .local$last.time <- event.time
+      return(FALSE)
     } else {
-      warning("Key handling loop")
-      gtkCellRendererStopEditing(renderer, FALSE)
-    }
+      return(TRUE)
+    }      
+#    event.time <- event[["time"]]
+#    if(event.time != .local$last.time){
+#      .local$last.time <- event.time
+#      gtkPropagateEvent(view, event) # or gdkEventPut(event)
+#    } else {
+#      warning("Key handling loop")
+#      gtkCellRendererStopEditing(renderer, FALSE)
+#    }
     return(TRUE)
   }
 
@@ -1300,31 +1391,32 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
       # .local$do.paint <- TRUE
 
       if(.local$doingEntryIntoCompletion){ #we're entering data into a factor 
-        entry.frame <- .local$model[row.idx, col.idx, drop=F] 
-        #entry.frame[1,1] <- entry$getText()
+        entry.frame <- .local$model[row.idx, col.idx, drop=F]
         zz <- list()
-        zz[[colnames(entry.frame)[1]]] <- entry$getText()
-        entry.frame <- data.frame(zz, row.names=rownames(entry.frame))      
+        zz[[colnames(entry.frame)[1]]] <- as.factor(entry$getText())
+        entry.frame <- data.frame(zz, row.names=rownames(entry.frame))
         EntryIntoModel(.local, entry.frame, row.idx, col.idx, add.factors=TRUE)        
           # Get out of selection in reasonable way
         if(!is.null(keyval)){
 	        stat <- entry$getData("stat")			  
-          if (ShiftLetter(keyval, stat, GDK_Return))
-             return(FALSE)
+          #if (ShiftLetter(keyval, stat, GDK_Return))
+          #   return(FALSE)
           if (keyval == GDK_Return)
-             MoveCursor(view, "down")        
+             MoveCursor(view, "down")
         }
       } else {  # not a factor, just do it
-        entry.frame <- .local$model[row.idx, col.idx, drop=F]      
-        entry.frame[1,1] <- entry$getText()      
-        EntryIntoModel(.local, entry.frame, row.idx, col.idx)
+        entry.frame <- .local$model[row.idx, col.idx, drop=F]
+        theClass <- class(entry.frame[[1]])
+        entry.frame[1,1] <- myDataTypeCoercions[[theClass]](entry$getText())
+        EntryIntoModel(.local, entry.frame, row.idx, col.idx) 
       }
-      #.local$doing.entry <- FALSE # unlock
+      .local$allow.key.flag <- TRUE # unlock
       return(FALSE)
     })
    col.idx <- data
    .local$doingEntryIntoCompletion <- FALSE  
-   if(!is.null(data.types[[GetDataTypeName(model, col.idx)]]$isFactor)){
+   typ <- sapply(model[integer(0),], class)[col.idx]	  
+   if(typ == "factor"){
      create.completion.model <- function(factor.levels) {
        store <- gtkListStoreNew("gchararray")
        sapply(factor.levels, function(x) store$set(store$append()$iter, 0, x))
@@ -1440,7 +1532,15 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
       .local$rectangles <- list()
       .local$viewGetBinWindow$invalidateRect(NULL, FALSE)             
     }
-    if (event[["button"]] == as.integer(3)){ # our popup menu
+    if (event[["button"]] == as.integer(1)){ 
+      handler <- .local$rowClickHandler
+      if(!is.null(handler) && is.function(handler)) {
+        info <- widget$getPathAtPos(event[["x"]], event[["y"]])
+        row.idx <- info$path$getIndices()+1
+        df <- MakeExternalDataFrame(.local$model)
+        handler(df, row.idx)
+      }
+    } else if (event[["button"]] == as.integer(3)){ # our popup menu
       info <- widget$getPathAtPos(event[["x"]], event[["y"]])
       m <- Row3rdButtonMenu(.local$model, info$path$getIndices()+1)
       gtkMenuPopupHack(m, button = event$GetButton(), 
@@ -1467,7 +1567,8 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
       if(is.null(info$path)) return(FALSE)
       if(event[["state"]] != as.integer(0)) return(FALSE)
       #widget$setCursorOnCell(info$path, allColumns[[col.idx]]$column, allColumns[[col.idx]]$renderer, FALSE)
-      UpdateColumnSelection(allColumns, GetColIdx(info$column))
+      .local$start.select.column <- GetColIdx(info$column)
+      UpdateColumnSelection(allColumns, .local$start.select.column)
     }   
     .local$flash.cursor <- TRUE
       #  Flash the rectangles off when you click
@@ -1481,20 +1582,20 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
   
     # Sync column selection with mouse-down
   ViewMotionNotify <- function(widget, event){
+    while(gtkEventsPending())
+      gtkMainIteration()  
     allColumns <- .local$allColumns
     pointer <- gdkWindowGetPointer(event[["window"]])
     if (as.flag(pointer$mask) & GdkModifierType["button1-mask"]){
       info <- gtkTreeViewGetPathAtPos(widget, pointer[["x"]], pointer[["y"]])
       if (info$retval){
         col.idx <- GetColIdx(info$column)
-    		if(!length(GetSelectedColumns())) {
-    		  new.sel <- col.idx
-    		} else {
-    		  new.sel <- GetSelectedColumns()[1]:col.idx
-    		  UpdateColumnSelection(allColumns, new.sel)
-    		}
-      }
+        if(is.null(.local$start.select.column)) .local$start.select.column <- col.idx
+  		  new.sel <- sort(.local$start.select.column:col.idx)
+  		  UpdateColumnSelection(allColumns, new.sel)
+     }
     }
+   
     return(FALSE)
   }
   
@@ -1569,7 +1670,7 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
    
 
   Cell3rdButtonMenu <- function(model, row.idx, col.idx){
-	  typ <- GetDataTypeName(model, col.idx+COLUMN_OFFSET)
+	  typ <-  sapply(model[integer(0),], class)[col.idx+COLUMN_OFFSET]	  
 	  m <- gtkMenu()
 	  cutItem <- gtkMenuItem("Cut")
 	  copyItem <- gtkMenuItem("Copy")
@@ -1585,16 +1686,16 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
       GetSelectedColumns()+.local$COLUMN_OFFSET, drop=F]))
 	  gSignalConnect(copyWithNamesItem, "activate", 
       function(...) CopyToClipboard(model[SelectedRowIndices(.local$view), 
-      GetSelectedColumns()+.local$COLUMN_OFFSET, drop=F], do.rownames=T, do.colnames=T))      
+        GetSelectedColumns()+.local$COLUMN_OFFSET, drop=F], do.rownames=T, do.colnames=T))      
 	  gSignalConnect(pasteItem, "activate", function(...) {
       dat <- ReadFromClipboard() # character vector
-      InsertIntoModel(.local, dat)
+      InsertIntoModel(.local, dat, insert.row=row.idx, insert.col=col.idx)
      })      
 	  
 	  m$append(gtkSeparatorMenuItem())
 	
-      model <- .local$model
-      view <- .local$view	
+    model <- .local$model
+    view <- .local$view	
 	  editFactorsItem <- gtkMenuItem("Edit Factors...")
 	  randomizeItem <- gtkMenuItem("Randomize Selected")
 	  fillItem <- gtkMenuItem("Fill Selected Down")	  
@@ -1603,7 +1704,7 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
 	  m$append(randomizeItem)
 	  m$append(fillItem)
 	  m$append(fillCyclicItem)
-	  if(is.null(data.types[[typ]]$isFactor))
+	  if(typ != "factor")
 	    lapply(c(editFactorsItem, fillCyclicItem), gtkWidgetSetSensitive, FALSE)
 	  gSignalConnect(editFactorsItem, "activate", function(...) DoFactorEditor(model, .local, col.idx + COLUMN_OFFSET))
 	  gSignalConnect(randomizeItem, "activate", function(...){
@@ -1638,11 +1739,10 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
   # Function to call when the data is sorted
   SortHandler <- function(new.order, .local){
     model <- .local$model
-    .local$model$setFrame(model[new.order,])
+    theFrame <- as.data.frame(model)[new.order,]
+    dmm <- dim(model)
+    EntryIntoModel(.local, theFrame, 1:dmm[1], 1:dmm[2])  
     UpdateTheRDataFrame(.local)    
-    quick_message("  Undo for this operation not yet implemented  ")
-    # turn undo off  
-    .local$theStack <- list()
   }
 
 	Corner3rdButtonMenu <- function(model){	
@@ -1651,12 +1751,11 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
 	  copyItem <- gtkMenuItem("Copy")
 	  pasteItem <- gtkMenuItem("Paste")
 	  m$append(cutItem)
-	  m$append(copyItem)
+	  m$append(copyItem)	  
 	  m$append(pasteItem)
 	  m$append(gtkSeparatorMenuItem())
 	  gSignalConnect(copyItem, "activate", function(...) 
       CopyToClipboard(model[,,drop=F], do.rownames=T, do.colnames=T))
-
 	  lapply(c(cutItem, pasteItem), 
       gtkWidgetSetSensitive, FALSE)
       	  
@@ -1667,14 +1766,16 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
 	  m$append(gtkSeparatorMenuItem())
 
     # move dataset 1 column along
- 	  #ordinalItem <- gtkMenuItem("Default Row Names")
-	  #gSignalConnect(ordinalItem, "activate", function(...) 
-    #  SetModelRowNames(.local, 1:dim(.local$model)[1]))
+ 	  ordinalItem <- gtkMenuItem("Default Row Names")
+	  gSignalConnect(ordinalItem, "activate", function(...) {
+	    dat <- data.frame(row.names = 1:dim(.local$model)[1])
+      EntryIntoModel(.local, dat, 1:dim(model)[1], integer(0), add.factors=FALSE)
+	  })
 
  	  setColumnItem <- gtkMenuItem("Row Names To Column")
 	  gSignalConnect(setColumnItem, "activate", function(...) 
       InsertColumn(1, .local$model[,1,drop=F]))
-	  #m$append(ordinalItem)      
+	  m$append(ordinalItem)      
 	  m$append(setColumnItem)
 	  m$append(gtkSeparatorMenuItem())
  	  setNameItem <- gtkMenuItem("Edit Dataset Name")
@@ -1689,7 +1790,8 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
   	  dlg <- gtkAboutDialogNew(show=F)
       dlg["authors"] <- c("Tom Taverner <Thomas.Taverner@pnl.gov>", 
         "Contributions from John Verzani", 
-        "R bindings to Gtk by Michael Lawrence and Duncan Temple Lang")
+        "RGtk2 by Michael Lawrence and Duncan Temple Lang",
+        "cairoDevice by Michael Lawrence")
       dlg["program-name"] <- "RGtk2DfEdit"
       dlg["comments"] <- "A spreadsheet data frame editor for the R environment"
       dlg["copyright"] <- "GPLv2"
@@ -1727,7 +1829,7 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
        CopyToClipboard(model[SelectedRowIndices(.local$view.rn),-c(1, dim(model)[2]), drop=F], do.rownames=T))
 	  gSignalConnect(pasteItem, "activate", function(...) {
       dat <- ReadFromClipboard() # character vector
-      InsertIntoModel(.local, dat, do.rownames = T, paste.rows=T)
+      InsertIntoModel(.local, dat, insert.row = row.idx, do.rownames = T, paste.rows=T)
     })                     
 
 	  insertItem <- gtkMenuItem("Insert")
@@ -1750,17 +1852,31 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
 	  m$append(insertAfterItem)	  
 	  m$append(deleteItem)
 	  m$append(clearItem)
+	  gSignalConnect(clearItem, "activate", function(...){	  	  
+      row.idx <- SelectedRowIndices(.local$view.rn)
+      RowNamesClearContents(row.idx)
+    })
 
-	  lapply(c(cutItem, clearItem, pasteItem), gtkWidgetSetSensitive, FALSE)
+	  lapply(c(cutItem), gtkWidgetSetSensitive, FALSE)
     if(!length(SelectedRowIndices(.local$view.rn))){	  
-  	  lapply(c(deleteItem), gtkWidgetSetSensitive, FALSE)    
+  	  lapply(c(deleteItem, pasteItem), gtkWidgetSetSensitive, FALSE)
  	  }
 	  
 	  return(m)
 	}
-	
+
+  ColumnClearContents <- function(col.idx){
+    if(length(col.idx)==0) return(FALSE)
+    entry.frame <- .local$model[,col.idx, drop=F]        
+    row.idx <- 1:dim(entry.frame)[1]          
+    stopifnot(ncol(entry.frame) > 0)  
+    for(jj in 1:ncol(entry.frame))
+      entry.frame[,jj] <- myDataTypeCoercions[[class(entry.frame[[jj]])]]("")
+    EntryIntoModel(.local, entry.frame, row.idx, col.idx)          
+  }
+  	
 	Column3rdButtonMenu <- function(model, col.idx){	
-	  typ <- GetDataTypeName(model, col.idx+COLUMN_OFFSET)
+    typ <- sapply(model[integer(0),], class)[col.idx+COLUMN_OFFSET]	  
 	  theColumn <- .local$model[,col.idx+COLUMN_OFFSET,drop=F]
 	  m <- gtkMenu()
 	  cutItem <- gtkMenuItem("Cut")
@@ -1775,16 +1891,17 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
          do.colnames=T))
 	  gSignalConnect(pasteItem, "activate", function(...) {
       dat <- ReadFromClipboard() # character vector
-      InsertIntoModel(.local, dat, do.colnames = T)
+      InsertIntoModel(.local, dat, insert.row=NULL, insert.col=col.idx, do.colnames = T)
      })              
 
 	  insertItem <- gtkMenuItem("Insert")
 	  deleteItem <- gtkMenuItem("Delete")
-	  clearItem <- gtkMenuItem("Clear Contents")
+	  clearItem <- gtkMenuItem("Clear Contents") 
 	  m$append(insertItem)
 	  m$append(deleteItem)
 	  m$append(clearItem)
 	  m$append(gtkSeparatorMenuItem())  
+	  gSignalConnect(clearItem, "activate", function(...) ColumnClearContents(col.idx+COLUMN_OFFSET))
 	  gSignalConnect(insertItem, "activate", function(...) InsertColumn(col.idx))
 	  gSignalConnect(deleteItem, "activate", function(...) DeleteColumn(GetSelectedColumns()))  
 	  
@@ -1795,21 +1912,25 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
 	  m$append(gtkSeparatorMenuItem())
 	  
     	  
-	  lapply(c(cutItem, clearItem), gtkWidgetSetSensitive, FALSE)
+	  lapply(c(cutItem), gtkWidgetSetSensitive, FALSE)
 	  if(col.idx == length(.local$allColumns)) 
       lapply(c(deleteItem), gtkWidgetSetSensitive, FALSE)
 
+    dataTypeNames <- list(Character="character", Integer="integer", Factor="factor", Logical="logical", Numeric="numeric")
 	  dataTypeItems <- list()
-	  for(theNewTypeName in names(data.types)){
+	  for(theNewTypeName in names(dataTypeNames)){
   		item <- gtkCheckMenuItem(theNewTypeName)
   		item$setDrawAsRadio(TRUE)
   		dataTypeItems[[length(dataTypeItems)+1]] <- item
   		gSignalConnect(item, "button-release-event", function(item, evt, theNewTypeName) {
-  			CoerceDataTypeTo(col.idx, theNewTypeName)
+        xx <- list()
+        xx[[colnames(.local$model)[col.idx+1]]] <- as(numeric(0), dataTypeNames[[theNewTypeName]])
+        entry.frame <- data.frame(xx, stringsAsFactors=F)
+        EntryIntoModel(.local, entry.frame, integer(0), col.idx+1)
   			m$popdown()
   			return(TRUE)
   		  }, theNewTypeName)
-  		if (theNewTypeName==typ) item$setActive(TRUE)  
+  		if (dataTypeNames[[theNewTypeName]]==typ) item$setActive(TRUE)  
   		m$append(item)
 	  }
 	  m$append(gtkSeparatorMenuItem())
@@ -1822,7 +1943,7 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
 	  m$append(setAsRowNamesItem)
 
 	  gSignalConnect(editFactorsItem, "activate", function(...) DoFactorEditor(model, .local, col.idx + COLUMN_OFFSET))  
-	  if(typ!="Factor") editFactorsItem$setSensitive(FALSE)
+	  if(typ != "factor") editFactorsItem$setSensitive(FALSE)
 	  
 	  gSignalConnect(abbreviateItem, "activate", function(...){
 	     abcol <- cbind(abbreviate(as.character(theColumn[[1]]), minlength=10))
@@ -1833,8 +1954,7 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
 	  gSignalConnect(setAsRowNamesItem, "activate", function(...){
 	    dat <- data.frame(row.names = make.unique(as.character(theColumn[[1]])))
       EntryIntoModel(.local, dat, 1:dim(model)[1], integer(0), add.factors=TRUE)
-    })	  
-    	      	                                         
+    })    	      	                                         
 	  return(m)
 	}
 
@@ -1871,7 +1991,7 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
     	  if(nchar(getText) < 1) return(FALSE)
     	  
         label$setText(getText)
-    	  assign(getText, GetDataFrameFromModel(.local$model), envir=.GlobalEnv)
+    	  assign(getText, MakeExternalDataFrame(.local$model), envir=.GlobalEnv)
     	  .local$dataset.name <- getText	  
         print(paste("RGtk2DfEdit: Creating dataset", .local$dataset.name, "in global environment."))
         obj$destroy()
@@ -1889,11 +2009,10 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
     }
     return(TRUE)
   }
-
+  
 	# column header clicked
   EventBoxButtonPress <- function (obj, event, data){
-    # get out of editing or selection
-    
+    # get out of editing or selection    
     view <- .local$view
     view.rn <- .local$view.rn
     model <- .local$model
@@ -1936,11 +2055,9 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
         if (event[["keyval"]] == GDK_Return) .local$view$grabFocus()
       })    
       gSignalConnect(entry, "focus-out-event", function(obj, event, data=col.idx){
-        #label$setText(getText)
-        #colnames(model)[data+COLUMN_OFFSET] <- getText
-        #UpdateTheRDataFrame(.local)
+    	  typ <-  sapply(model[integer(0),], class)[col.idx+COLUMN_OFFSET]	
    	    ll <- list()
-   	    ll[[obj$getText()]] <- integer(0)
+   	    ll[[obj$getText()]] <- as(numeric(0), typ)
    	    dat <- data.frame(ll)
         obj$destroy()
         box$packEnd(label, FALSE, FALSE, 0)
@@ -1950,9 +2067,9 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
       return(TRUE)
     } else if (button == as.integer(1) && typ == as.integer(4)){ # column clicked  	
 
-    	handler <- .local$columnClickedHandler
+    	handler <- .local$columnClickHandler
       if(!is.null(handler) && is.function(handler)) {
-        df <- GetDataFrameFromModel(.local$model)
+        df <- MakeExternalDataFrame(.local$model)
         col <- data$col.idx
         handler(df, col)
       }        
@@ -1983,34 +2100,6 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
     return(TRUE)
   }
   
-  # new version. coerce all selected.
-  CoerceDataTypeTo <- function(col.idx, theNewTypeName){
-    model <- .local$model
-    df <- as.data.frame(model)
-
-    selectedColumns <- GetSelectedColumns()
-    if(!length(selectedColumns)) selectedColumns <- col.idx
-    for(col.idx in selectedColumns){
-      if(theNewTypeName%in%names(data.types)){
-        df[,col.idx+COLUMN_OFFSET] <- data.types[[theNewTypeName]]$coerce(df[,col.idx+COLUMN_OFFSET])
-      } else {
-        stop("Unknown data type name")
-      }
-        # if class is text then ellipsize it...
-      renderer <- .local$allColumns[[col.idx]]$renderer
-      if(!is.null(data.types[[theNewTypeName]]$isText)) {
-        renderer['ellipsize-set'] <- TRUE
-        renderer['ellipsize'] <- PangoEllipsizeMode['end']
-      } else if (renderer['ellipsize-set'] == TRUE){
-        renderer['ellipsize'] <- PangoEllipsizeMode['none']
-        renderer['ellipsize-set'] <- FALSE
-      }
-    }
-    # update frame
-  	model$setFrame(df)	
-  } # end function
-
-  
   # replace the entire gtktab
   ReplaceEditWindow <- function(new.df){
     new.df.to.insert <- MakeInternalDataFrame(new.df)        
@@ -2021,7 +2110,7 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
     
   # Delete column at position in backing D.F.
   DeleteColumn <- function(col.idx){
-    backing.df <- GetDataFrameFromModel(.local$model)  
+    backing.df <- MakeExternalDataFrame(.local$model)  
     new.df <- backing.df[,-col.idx,drop=F]
     
     #path <- gtkTreeViewGetCursor(.local$view)$path
@@ -2038,7 +2127,7 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
       
   # Append column at a position, null defaults to blank
   InsertColumn <- function(insert.idx, new.column=NULL, default.name = "New.Column"){
-    backing.df <- GetDataFrameFromModel(.local$model)
+    backing.df <- MakeExternalDataFrame(.local$model)
     ncols <- dim(backing.df)[2]
     idx.ord <- append(1:ncols, ncols+1, after=insert.idx-1)    
     if(is.null(new.column)){    
@@ -2119,22 +2208,12 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
     return(allColumns)
   }
   
-    # don't paint when you're scrolling
   MakeAVerticalScrollbar <- function(gtktab, va){
 	  vbar <- gtkVScrollbarNew(va)
-	  vbar$setEvents(GdkEventMask["button-press-mask"] | GdkEventMask["button-release-mask"])
 	  gtktab$attach(vbar, 1, 2, 0, 1, 0, 5)
-	 
-	  gSignalConnect(vbar,"button-press-event", function(obj, evt) {
-		  .local$do.paint <- FALSE
-		  .local$viewGetBinWindow$invalidateRect(NULL, FALSE)
-		  return(FALSE)
-	  })  
-	  gSignalConnect(vbar,"button-release-event", function(obj, evt) {
-		  .local$do.paint <- TRUE
-		  .local$viewGetBinWindow$invalidateRect(NULL, FALSE)
-		  return(FALSE)
-	  })
+	    # scroll on this doesn't repaint, kill it
+	  #vbar$setEvents(GdkEventMask["scroll-mask"])	  
+    gSignalConnect(vbar, "scroll-event", function(...) TRUE)
 	  return(vbar)
   }
 	
@@ -2145,12 +2224,67 @@ gtkDfEdit <- function(items, dataset.name = deparse(substitute(items)), size.req
       for(r in .local$rectangles){
         r$y <- r$y - currentVadj
         r1 <- r
-        if(r1$height > 0 && r1$width > 0) 
+        if(r1$height > 0 && r1$width > 0){
+         selectedColorRgb <- c(49, 106, 197)
+         cr <- gdkCairoCreate(.local$viewGetBinWindow)
+         cr$setSourceRgba(selectedColorRgb[1]/256, 
+            selectedColorRgb[2]/256, selectedColorRgb[3]/256, 0.2)      
+         cr$rectangle(r1$x, r1$y, r1$width, r1$height)
+         cr$clip()
+         cr$paint()
           gdkDrawRectangle(.local$viewGetBinWindow, .local$gc.invert, filled = F, r1$x, r1$y, r1$width, r1$height)          
+        }
       }
     } # display mode
     return(FALSE)
   }
+  
+  DoScrollUpdate <- function(obj, evt){
+    while(gtkEventsPending())
+      gtkMainIteration()
+    dir <- evt[["direction"]]
+    va <- .local$vbar$getAdjustment()
+    if (dir == GdkScrollDirection["down"]) {
+      new.val <- min(va$getValue() + va[["step_increment"]], va[["upper"]] - va[["page_size"]])    
+      va$setValue(new.val)
+    } else if (dir == GdkScrollDirection["up"]) {
+      va$setValue(va$getValue() - va[["step_increment"]])
+    }
+    FALSE
+  }      
+  
+  ViewOnScrollChanged <- function(obj, data){
+    # Take over the event loop! 
+    # See http://wiki.laptop.org/go/PyGTK/Smooth_Animation_with_PyGTK
+    while(gtkEventsPending())
+      gtkMainIteration()
+    gtkAdjustmentSetValue(data, gtkAdjustmentGetValue(obj))
+    .local$allow.key.flag <- TRUE
+  }
+  
+  ConnectViewsTogether <- function(gtktab, view1, sw1, sw2, ss2){
+  
+  	gSignalConnect(view1, "focus-in-event", function(obj, event){
+  	  if(!.local$disconnected.scrollID) {
+  		  #stop("Other handler still connected")
+  		  return(FALSE)
+  	  }
+  	  try(.local$vbar$unrealize(), silent=T)
+  	  .local$vbar <- MakeAVerticalScrollbar(gtktab, sw1)
+  	  gtkTreeSelectionUnselectAll(ss2)    
+  	  .local$scrollID <- 0    	  
+  	  .local$scrollID <- gSignalConnect(sw1, "value-changed", ViewOnScrollChanged, data=sw2)         
+  	  .local$disconnected.scrollID <- FALSE
+  	  FALSE
+	  }) #gSignalConnect focus-in
+	  
+	gSignalConnect(view1, "focus-out-event", function(obj, event){
+	 try({gSignalHandlerDisconnect(sw1, .local$scrollID)
+	  .local$disconnected.scrollID <- TRUE
+	  }, silent=T)
+	  FALSE
+	})
+}   
 
 	###############################################################################
 	# End of GUI setup
@@ -2237,7 +2371,10 @@ MakeDFEditWindow <- function(ds, dataset.name, ...){
     })
     gSignalConnect(view, "expose-event", after=T, ViewExpose)
     
-  #  gSignalConnect(view, "scroll-event", after=T, ViewRefresh)
+    gSignalConnect(view, "scroll-event", after=T, DoScrollUpdate)
+    gSignalConnect(view.rn, "scroll-event", after=T, DoScrollUpdate)    
+
+    
     gSignalConnect(view, "leave-notify-event", AddHScrollTimeout)
     lapply(c("enter-notify-event", "button-release-event", "focus-out-event"), 
       function(evt) gSignalConnect(view, evt, RemoveHScrollTimeout))  
@@ -2257,87 +2394,20 @@ MakeDFEditWindow <- function(ds, dataset.name, ...){
       .local$toplevel <- toplevel
     }  
    	view$grabFocus()  	
+   	
     return(TRUE)  
    }) # end of map event callback
- 
-	gSignalConnect(view, "focus-in-event", function(obj, event){
-	  if(!.local$disconnected.scrollID) {
-		#stop("Other handler still connected")
-		return(FALSE)
-	  }
-	  vbar$unrealize()
-	  vbar <- MakeAVerticalScrollbar(gtktab, sw.view.va)
-	  gtkTreeSelectionUnselectAll(ss.rn)    
-	  .local$scrollID <- 0
-	  .local$scrollID <- gSignalConnect(sw.view.va, "value-changed",
-		function(obj, data=sw.rn.va){
-		  gtkAdjustmentSetValue(data, gtkAdjustmentGetValue(obj))
-		})
-	  .local$disconnected.scrollID <- FALSE
-	  FALSE
-	})
-	gSignalConnect(view, "focus-out-event", function(obj, event){
-	 try({gSignalHandlerDisconnect(sw.view.va, .local$scrollID)
-	  .local$disconnected.scrollID <- TRUE
-	  }, silent=T)
-	  FALSE
-	})
-	
-	## end 	
-	gSignalConnect(view.rn, "focus-in-event", function(obj, event){
-	  if(!.local$disconnected.scrollID) {
-		#stop("Other handler still connected")
-		return(FALSE)
-	  }
-	  vbar$unrealize()
-	  #vbar <- gtkVScrollbarNew(sw.rn.va)
-	  #gtktab$attach(vbar, 1, 2, 0, 1, 0, 5)
-	  vbar <- MakeAVerticalScrollbar(gtktab, sw.rn.va)
-	  gtkTreeSelectionUnselectAll(ss)    
-	  .local$scrollID <- 0
-	  .local$scrollID <- gSignalConnect(sw.rn.va, "value-changed",
-		function(obj, data=sw.view.va){
-		  gtkAdjustmentSetValue(data, gtkAdjustmentGetValue(obj))
-		})
-	  .local$disconnected.scrollID <- FALSE
-	  FALSE
-	})
-	gSignalConnect(view.rn, "focus-out-event", function(obj, event){
-	 try({gSignalHandlerDisconnect(sw.rn.va, .local$scrollID)
-	  .local$disconnected.scrollID <- TRUE
-	  }, silent=T)
-	  FALSE
-	})
-	## end 
+   
+
+    
+  ConnectViewsTogether(gtktab, view, sw.view.va, sw.rn.va, ss.rn)
+  ConnectViewsTogether(gtktab, view.rn, sw.rn.va, sw.view.va, ss)  
 
   return(gtktab)
 } # end MakeDFEditWindow
 
-  last.time <- 0
-  COLUMN_OFFSET <- 1
-  .local$COLUMN_OFFSET <- COLUMN_OFFSET
-  gtktab <- NULL
 
-  .local$selectedColumns <- integer(0)
-  .local$do.paint <- TRUE
-  .local$do.rendererEditingStarted <- TRUE
-  .local$doingEntryIntoFactor <- FALSE
-  .local$flash.cursor <- FALSE        
-  .local$model <- NULL
-  .local$allColumns <- NULL
-  .local$scrollID <- 0
-  .local$disconnected.scrollID <- TRUE
-  .local$FIRST_PATH <- NULL
-  .local$LAST_PATH <- NULL  
-  .local$doingHScroll <- FALSE
-  .local$SCROLL_ROW_TIMEOUT <- 150  
-  .local$theStack <- list()
-  .local$group.main <- gtkVBoxNew()
-  .local$FIRST_PATH <- gtkTreePathNewFromString(0)    
-  .local$scrollID <- 0
-  .local$last.time <- 0  
-  .local$disconnected.scrollID <- TRUE  
-
+  .local$doing.scroll <- FALSE
   ## Finally do the setup
   .local$dataset.name <- dataset.name
   ds <- MakeInternalDataFrame(items)
@@ -2432,7 +2502,7 @@ gtkDfEditGetRowNames <- function(object) {
 #' @export
 gtkDfEditGetDataFrame <- function(object) {
   #dimnames(model) <- list(object$getRowNames(), object$getColumnNames())
-  return(GetDataFrameFromModel(object$getModel()))
+  return(MakeExternalDataFrame(object$getModel()))
 }
 
 
@@ -2443,14 +2513,27 @@ gtkDfEditGetDataFrame <- function(object) {
 #' @param handler Function to call when column clicked. Signature is (dataframe, column number). If NULL (default)
 #'        no handler is called.
 #' @export
-gtkDfEditSetColumnClickHandler <- function(object, columnClickedHandler=NULL) {
+gtkDfEditSetColumnClickHandler <- function(object, columnClickHandler=NULL) {
  ## XXX must set up handler to make this work
   l <- object$getData(".local")
-  l$columnClickedHandler <- columnClickedHandler
+  l$columnClickHandler <- columnClickHandler
   object$setData(".local", l)
   invisible()
 }
 
+#' Function to call when row is clicked
+#'
+#' IF set to NULL, no handler is called.
+#' @param object The RGtk2DfEdit object
+#' @param handler Function to call when row clicked. Signature is (dataframe, row number). If NULL (default)
+#'        no handler is called.
+#' @export
+gtkDfEditSetRowClickHandler <- function(object, rowClickHandler=NULL) {
+  l <- object$getData(".local")
+  l$rowClickHandler <- rowClickHandler
+  object$setData(".local", l)
+  invisible()
+}
 
 #' S3 data extraction method
 #'

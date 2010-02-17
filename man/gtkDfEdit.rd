@@ -78,26 +78,39 @@ Mouse navigation to a grid location can be done via the scroll bars on the grid.
 
 Using non-navigation keys in a selected cell will start editing within the cell.
 If the column is of factor type, the cell entry will provide the user with an 
-autocompletion containing existing factor levels. 
+autocompletion containing existing factor levels.
 
 Focusing out of the cell or pressing any navigation key will end the edit. 
 Edited cell entries will be coerced to the column's data type, so alphabetical 
 strings put into numeric columns will turn into a platform-dependent variant
-of "NA". Adding a new item to a factor column will automatically update the 
-factor levels.
+of "NA". All character strings are stripped of beginning and end whitespace.
+Adding a new item to a factor column will automatically update factor levels.
+
+Deleting cells sets their contents to either NA, or "" if the cells are of type 
+character. Deleting cell contents can be done in a number of ways. Deleting a 
+block of selected cells on the grid can be done by selecting them, then 
+pressing the Delete key. The Backspace key deletes the cell the cursor is on 
+ignoring all selections.
+
+Deleting entire rows and columns can be done by selecting the row names or 
+column headers then pressing Delete, or else by right-clicking on the row names 
+or column headers to bring up the context menu then clicking "Clear Contents".
 
 Changes made in the data frame editor are automatically and invisibly updated 
 so the R data frame object is kept synchronous with the grid display.
 
 Ctrl-Z undoes the previous edit to cells, rows or columns, with certain 
 limitations. It will not restore changes to the numbers of rows or columns, or
-undo data type coercion.
+undo data values altered by coercion (see below).
 
 \strong{Editing Row And Column Names}
 
 Double clicking row names and column names allows the user to edit them. 
 Typing in the replacement name and pressing Enter, Escape or clicking somewhere 
 else will set the changed row or column name. 
+
+Duplicate row names will be turned into unique values by replacing each 
+duplicate with the lowest possible ordinal number.
 
 These operations can be undone via Ctrl-Z.
 
@@ -164,9 +177,9 @@ These operations can be undone via Ctrl-Z.
 \strong{Data Coercion And Special Functions}
 
 From the right click context menu on column headers the selected data frame 
-columns' assigned type can be changed. Available data types are Numeric, Integer, 
-Logical, Character, Factor. Factor is a special enumerated data type (also 
-known as a category) which can have its attributes set using the in-built
+columns' assigned type can be changed. Available data types are Numeric, 
+Integer, Logical, Character, Factor. Factor is a special enumerated data type 
+(also known as a category) which can have its attributes set using the in-built
 Factor Editor (see below). To coerce a data column, just open this menu and 
 click the desired type.
 
@@ -181,7 +194,9 @@ their ordinality. "Edit Dataset Name" allows the data set name in the R
 environment to be reassigned. "Default Row Names" sets the row names to their
 ordinal numbers from 1 to the number of rows.
 
-These operations cannot be undone.
+Coercion can be undone but the side effects are not necessarily undoable. For 
+example, coercing a column of integers to a logical will irreversibly set the
+integer values to 1 and 0 after undoing the operation.
 
 \strong{Inserting And Deleting Columns And Rows}
 

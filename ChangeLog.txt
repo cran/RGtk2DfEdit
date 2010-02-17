@@ -1,3 +1,16 @@
+2010-02-17  tom taverner  <thomas.taverner@pnl.gov>
+
+	* R/RGtk2DfEdit.R : improved scrolling and entry for large 
+	tables, added cairoDevice for selection drawing
+	
+2010-02-16  tom taverner  <thomas.taverner@pnl.gov>
+
+	* R/RGtk2DfEdit.R : row insert, coercion undo, clear contents
+
+2010-02-16  tom taverner  <thomas.taverner@pnl.gov>
+
+	* R/RGtk2DfEdit.R : fixed frame saving bug
+	
 2010-02-16  tom taverner  <thomas.taverner@pnl.gov>
 
 	* R/RGtk2DfEdit.R : fixed frame saving bug
