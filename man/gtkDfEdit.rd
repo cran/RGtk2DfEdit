@@ -12,7 +12,7 @@ gtkDfEdit
 }
 \usage{
 gtkDfEdit(items, dataset.name = deparse(substitute(items)), 
-size.request=c(500, 300))
+size.request=c(500, 300), col.width=64)
 }
 %- maybe also 'usage' for other objects documented here.
 \arguments{
@@ -24,6 +24,9 @@ The name of the data frame object to modify.
 }
   \item{size.request}{
   The size request for the window.
+}
+  \item{col.width}{
+  The column width.
 }
 }
 \details{
@@ -72,7 +75,8 @@ Pressing a non-navigation key when the row names have focus will cause automatic
 navigation to the closest match for the row name. The name matching entry dialog 
 will go away after a couple of seconds.
 
-Mouse navigation to a grid location can be done via the scroll bars on the grid.
+Mouse navigation to a grid location can be done via the scroll bars on the grid
+or using the scroll wheel.
 
 \strong{Editing The Grid}
 
@@ -99,9 +103,9 @@ or column headers to bring up the context menu then clicking "Clear Contents".
 Changes made in the data frame editor are automatically and invisibly updated 
 so the R data frame object is kept synchronous with the grid display.
 
-Ctrl-Z undoes the previous edit to cells, rows or columns, with certain 
-limitations. It will not restore changes to the numbers of rows or columns, or
-undo data values altered by coercion (see below).
+Ctrl-Z undoes any editing action on the grid. Actions that have side effects on
+the data, such as coercion, are not fully undoable, which reflects the way R
+handles these functions.
 
 \strong{Editing Row And Column Names}
 
@@ -111,8 +115,6 @@ else will set the changed row or column name.
 
 Duplicate row names will be turned into unique values by replacing each 
 duplicate with the lowest possible ordinal number.
-
-These operations can be undone via Ctrl-Z.
 
 \strong{Editing The Data Frame Object Name}
 
@@ -133,7 +135,7 @@ held down to select a block.
 Left-clicking and dragging on a region of cells selects the region and draws a 
 focus rectangle around it. Selections are indicated by highlighted rows, column 
 headers and a drawn focus rectangle. Rows can be selected by focusing on the 
-floating row column and then doing either mouse and keyboard selection. 
+row name column then doing either mouse or keyboard selection. 
 
 The keyboard can also be used for grid selection. Left clicking on column 
 headers or row names selects the columns or rows. Multiple, or ranges of, 
@@ -154,9 +156,10 @@ are used. In Windows, we use the R functions \code{writeClipboard} and
 \code{readLines}.
 
 Ctrl-V pastes cell selections to the clipboard at the selected point into a 
-block defined by the size of the pasted matrix and starting at the corner most 
-selected cell. At this point, this operation will add rows, but not columns, to
-the grid. Pasting automatically coerces data to the type in the column. 
+block defined by the size of the pasted matrix and starting at the top left
+corner of the top left selected cell. If necessary, this operation will change 
+the dimension of the grid. Pasting automatically coerces data to the type in 
+the column. 
 
 Ctrl-C entered while focus is on the grid copies the selected block of cells.
 
@@ -172,7 +175,11 @@ menus over row headers or column headers in the "Copy" and "Paste" commands.
 Copying from a column will include the column header and copying from a row will
 include the row header. Pasting on columns will update the column headers.
 
-These operations can be undone via Ctrl-Z.
+Copying an entire data frame into the editor can be done through the grid top 
+left corner right click selection menu through the "Paste..." command. This 
+command brings up a global paste dialog which allows the user to choose 
+whether the pasted data has row names and/or column names. When "OK" is pressed 
+the data will be pasted in.
 
 \strong{Data Coercion And Special Functions}
 
@@ -188,29 +195,27 @@ contents of the column as the data frame's row names. The menu function
 "Shorten Names..." replaces long string names with their unique abbreviations. 
 
 Right clicking the top-left corner cell selects all cells and brings up a menu 
-allowing global cut, copy, and paste actions. "Row Names To Column" inserts the 
-row names into the first column of the data set and replaces the row names by 
-their ordinality. "Edit Dataset Name" allows the data set name in the R 
-environment to be reassigned. "Default Row Names" sets the row names to their
-ordinal numbers from 1 to the number of rows.
+allowing global cut, copy, and paste actions. "Edit Dataset Name" allows the 
+data set name in the R environment to be reassigned. "Default Row Names" sets 
+the row names to their ordinal numbers from 1 to the number of rows. 
+"Default Column Names" sets the column names to the familiar spreadsheet-style
+defaults.
 
-Coercion can be undone but the side effects are not necessarily undoable. For 
-example, coercing a column of integers to a logical will irreversibly set the
-integer values to 1 and 0 after undoing the operation.
+Coercion can be partially undone via Ctrl-Z, but to reflect R's handling of 
+coercion, coercing between classes that are not interchangable, such as from a 
+character to a numeric variable, is not undoable.
 
 \strong{Inserting And Deleting Columns And Rows}
 
 Right clicking on row name headers brings up a menu which allows Insert and 
 Delete actions on data columns. "Insert" inserts a blank row before the row 
-clicked. "Insert After" inserts a blank row after the point. "Delete" deletes 
-the selected row range and is not available when rows are not selected. 
+clicked. "Delete" deletes the selected row range and is not available when rows
+are not selected. 
 
 Right clicking on column name headers similarly brings up a menu which allows 
 Insert and Delete actions on data columns. "Insert" inserts a blank column 
 before the column clicked. To insert a blank column at the end, click the blank 
 header at the right hand side. "Delete" deletes the selected column(s).
-
-These operations cannot be undone.
 
 \strong{Editing Factors}
 
@@ -261,8 +266,7 @@ From the right-click menu on the corner left hand cell or on the columns, the
 Selection frame (2) "Add/Remove Key" frame to add/remove sort keys (3) "OK" and
 "Cancel" buttons.
 
-Sort operations on the data cannot currently be undone and they will rearrange 
-the underlying R object and cause the undo stack to be cleared.
+Sort operations on the data can be undone via Ctrl-Z.
 
 The "Sort Key" frame contains key choice items consisting of a combo box for 
 key selection, radio buttons for coercion of the key, and radio buttons for 

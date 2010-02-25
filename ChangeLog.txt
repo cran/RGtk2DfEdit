@@ -1,7 +1,19 @@
+2010-02-21  tom taverner  <thomas.taverner@pnl.gov>
+
+	* R/RGtk2DfEdit.R : pretty-printing option for numeric data,
+	many minor bug fixes, added blank final row, completely redid
+	editing internals with macros
+	
+2010-02-18  tom taverner  <thomas.taverner@pnl.gov>
+
+	* R/RGtk2DfEdit.R : added undo for dimension changes,
+	fixed scrollbar bug, made .local$theFrame a permanent object
+
 2010-02-17  tom taverner  <thomas.taverner@pnl.gov>
 
 	* R/RGtk2DfEdit.R : improved scrolling and entry for large 
-	tables, added cairoDevice for selection drawing
+	tables, added cairoDevice for selection drawing, fixed factor
+	delete undo bug, fixed bug on putting into notebook
 	
 2010-02-16  tom taverner  <thomas.taverner@pnl.gov>
 
